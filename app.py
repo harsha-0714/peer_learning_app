@@ -1,162 +1,323 @@
 import streamlit as st
 import pandas as pd
-from database import get_connection, initialize_db
+import sqlite3
+from database import get_connection, initialize_db, hash_password
 
 initialize_db()
 conn = get_connection()
 cursor = conn.cursor()
 
-# -- LOGIN FUNCTION --
-def authenticate_user(username, password):
-    cursor.execute("SELECT * FROM Admin WHERE Username=? AND Password=?", (username, password))
+# --- Authentication System ---
+def authenticate_admin(username, password):
+    hashed = hash_password(password)
+    cursor.execute("SELECT * FROM Admin WHERE Username=? AND Password=?", (username, hashed))
     return cursor.fetchone()
 
-# -- LOGIN INTERFACE --
+def authenticate_user(email):
+    cursor.execute("SELECT * FROM Students WHERE Email=?", (email,))
+    student = cursor.fetchone()
+    cursor.execute("SELECT * FROM Faculty WHERE Email=?", (email,))
+    faculty = cursor.fetchone()
+    return student or faculty
+
+# --- Login Page ---
 if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
+    st.session_state.update({
+        "authenticated": False,
+        "user_type": None,
+        "user_email": None
+    })
 
 if not st.session_state.authenticated:
-    st.title("🔐 Admin Login")
-    user = st.text_input("Username")
-    pwd = st.text_input("Password", type="password")
-    if st.button("Login"):
-        if authenticate_user(user, pwd):
-            st.success("Logged in successfully!")
-            st.session_state.authenticated = True
-            st.rerun()
+    st.title("🔐 SkillSync Login")
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        st.image("https://cdn-icons-png.flaticon.com/512/5087/5087579.png", width=150)
+    
+    with col2:
+        user_type = st.radio("Login as:", ["Admin", "Student/Faculty"], horizontal=True)
+        
+        if user_type == "Admin":
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            if st.button("🔑 Admin Login"):
+                if authenticate_admin(username, password):
+                    st.session_state.update({
+                        "authenticated": True,
+                        "user_type": "admin",
+                        "user_email": username
+                    })
+                    st.rerun()
+                else:
+                    st.error("Invalid admin credentials")
         else:
-            st.error("Invalid credentials.")
+            email = st.text_input("Email Address")
+            if st.button("👤 User Login"):
+                if user := authenticate_user(email):
+                    st.session_state.update({
+                        "authenticated": True,
+                        "user_type": "user",
+                        "user_email": email
+                    })
+                    st.rerun()
+                else:
+                    st.error("Email not registered")
+    st.stop()
 
-# MAIN APP
-if st.session_state.authenticated:
-    st.title("📘 Skill-Based Peer Learning Platform")
+# --- Logout Button ---
+with st.sidebar:
+    if st.button("🚪 Logout"):
+        st.session_state.authenticated = False
+        st.rerun()
+
+# --- Admin Interface ---
+if st.session_state.user_type == "admin":
+    st.title("👨💼 Admin Dashboard")
+    st.sidebar.success(f"Logged in as Admin: {st.session_state.user_email}")
 
     tabs = st.tabs([
-        "Add Student", 
-        "Add Faculty", 
-        "Add Skill", 
-        "Assign Skill", 
-        "Schedule Session", 
-        "Admin Dashboard", 
-        "Export Data"
+        "➕ Add Records", 
+        "🔗 Assign Skills", 
+        "🗓 Schedule Sessions", 
+        "📊 System Data",
+        "⬇️ Export Data",
+        "🗑️ Data Management"
     ])
 
-    # TAB 1: Add Student
+    # TAB 1: Add Records
     with tabs[0]:
-        st.header("➕ Add Student")
-        name = st.text_input("Student Name")
-        email = st.text_input("Student Email")
-        year = st.selectbox("Year", [1, 2, 3, 4])
-        if st.button("Add Student"):
-            try:
-                cursor.execute("INSERT INTO Students (Name, Email, Year) VALUES (?, ?, ?)", (name, email, year))
-                conn.commit()
-                st.success("Student added.")
-            except:
-                st.error("Email already exists.")
+        st.header("📥 Add New Records")
+        add_type = st.radio("Select Record Type:", 
+                          ["Student", "Faculty", "Skill"], 
+                          horizontal=True)
+        
+        if add_type == "Student":
+            with st.form("student_form", clear_on_submit=True):
+                name = st.text_input("Full Name")
+                email = st.text_input("Email")
+                year = st.selectbox("Academic Year", [1, 2, 3, 4])
+                if st.form_submit_button("Add Student"):
+                    try:
+                        cursor.execute("INSERT INTO Students VALUES (NULL,?,?,?)", 
+                                      (name, email, year))
+                        conn.commit()
+                        st.success("🎓 Student added successfully!")
+                    except sqlite3.IntegrityError:
+                        st.error("❌ Email already exists")
 
-    # TAB 2: Add Faculty
+        elif add_type == "Faculty":
+            with st.form("faculty_form", clear_on_submit=True):
+                name = st.text_input("Full Name")
+                email = st.text_input("Email")
+                dept = st.text_input("Department")
+                if st.form_submit_button("Add Faculty"):
+                    try:
+                        cursor.execute("INSERT INTO Faculty VALUES (NULL,?,?,?)", 
+                                      (name, email, dept))
+                        conn.commit()
+                        st.success("👨🏫 Faculty added successfully!")
+                    except sqlite3.IntegrityError:
+                        st.error("❌ Faculty email exists")
+
+        elif add_type == "Skill":
+            with st.form("skill_form", clear_on_submit=True):
+                skill = st.text_input("Skill Name")
+                if st.form_submit_button("Add Skill"):
+                    try:
+                        cursor.execute("INSERT INTO Skills VALUES (NULL,?)", (skill,))
+                        conn.commit()
+                        st.success("💡 Skill added successfully!")
+                    except sqlite3.IntegrityError:
+                        st.error("❌ Skill already exists")
+
+    # TAB 2: Assign Skills
     with tabs[1]:
-        st.header("👩‍🏫 Add Faculty")
-        fname = st.text_input("Faculty Name")
-        femail = st.text_input("Faculty Email")
-        dept = st.text_input("Department")
-        if st.button("Add Faculty"):
-            try:
-                cursor.execute("INSERT INTO Faculty (Name, Email, Department) VALUES (?, ?, ?)", (fname, femail, dept))
-                conn.commit()
-                st.success("Faculty added.")
-            except:
-                st.error("Faculty email already exists.")
-
-    # TAB 3: Add Skill
-    with tabs[2]:
-        st.header("💡 Add Skill")
-        skill = st.text_input("Skill Name")
-        if st.button("Add Skill"):
-            try:
-                cursor.execute("INSERT INTO Skills (SkillName) VALUES (?)", (skill,))
-                conn.commit()
-                st.success("Skill added.")
-            except:
-                st.error("Skill already exists.")
-
-    # TAB 4: Assign Skill
-    with tabs[3]:
-        st.header("🔗 Assign Skill to Student")
+        st.header("🔗 Skill Assignment")
         students = cursor.execute("SELECT StudentID, Name FROM Students").fetchall()
         skills = cursor.execute("SELECT SkillID, SkillName FROM Skills").fetchall()
+        
         if students and skills:
-            student = st.selectbox("Select Student", students, format_func=lambda x: f"{x[1]} (ID: {x[0]})")
-            skill = st.selectbox("Select Skill", skills, format_func=lambda x: f"{x[1]} (ID: {x[0]})")
-            prof = st.radio("Proficiency", ["Beginner", "Intermediate", "Advanced"])
-            if st.button("Assign"):
-                cursor.execute("INSERT OR REPLACE INTO StudentSkills VALUES (?, ?, ?)", (student[0], skill[0], prof))
-                conn.commit()
-                st.success("Skill assigned.")
-        else:
-            st.warning("Please add students and skills first.")
-
-    # TAB 5: Schedule Session
-    with tabs[4]:
-        st.header("🗓 Schedule Session")
-        if students:
-            tutor = st.selectbox("Tutor", students, format_func=lambda x: x[1])
-            learner = st.selectbox("Learner", students, format_func=lambda x: x[1])
-            date = st.date_input("Date")
-            topic = st.text_input("Topic")
-            if st.button("Schedule"):
-                if tutor[0] != learner[0]:
-                    cursor.execute("INSERT INTO Sessions (TutorID, LearnerID, Date, Topic) VALUES (?, ?, ?, ?)",
-                                   (tutor[0], learner[0], date.isoformat(), topic))
+            with st.form("assign_form"):
+                student = st.selectbox("Student", students, 
+                                      format_func=lambda x: f"{x[1]} (ID: {x[0]})")
+                skill = st.selectbox("Skill", skills, 
+                                    format_func=lambda x: f"{x[1]} (ID: {x[0]})")
+                prof = st.select_slider("Proficiency Level", 
+                                       ["Beginner", "Intermediate", "Advanced"])
+                if st.form_submit_button("Assign Skill"):
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO StudentSkills 
+                        VALUES (?,?,?)
+                    """, (student[0], skill[0], prof))
                     conn.commit()
-                    st.success("Session scheduled.")
-                else:
-                    st.error("Tutor and learner must be different.")
+                    st.success(f"✅ {student[1]} assigned {skill[1]} skill")
         else:
-            st.warning("Add students first.")
+            st.warning("Please add students and skills first")
 
-    # TAB 6: Admin Dashboard
+    # TAB 3: Schedule Sessions
+    with tabs[2]:
+        st.header("🗓 Session Scheduling")
+        students = cursor.execute("SELECT StudentID, Name FROM Students").fetchall()
+        
+        if students:
+            with st.form("session_form"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    tutor = st.selectbox("Tutor", students,
+                                        format_func=lambda x: x[1])
+                with col2:
+                    learner = st.selectbox("Learner", students,
+                                          format_func=lambda x: x[1])
+                date = st.date_input("Session Date")
+                topic = st.text_input("Session Topic")
+                
+                if st.form_submit_button("Schedule Session"):
+                    if tutor[0] == learner[0]:
+                        st.error("Tutor and learner must be different")
+                    else:
+                        cursor.execute("""
+                            INSERT INTO Sessions 
+                            VALUES (NULL,?,?,?,?)
+                        """, (tutor[0], learner[0], date.isoformat(), topic))
+                        conn.commit()
+                        st.success("📅 Session scheduled successfully!")
+        else:
+            st.warning("Add students first")
+
+    # TAB 4: System Data
+    with tabs[3]:
+        st.header("📊 System Dashboard")
+        
+        with st.expander("👥 Student Overview"):
+            students_df = pd.read_sql("SELECT * FROM Students", conn)
+            st.dataframe(students_df, use_container_width=True)
+        
+        with st.expander("🏫 Faculty Overview"):
+            faculty_df = pd.read_sql("SELECT * FROM Faculty", conn)
+            st.dataframe(faculty_df, use_container_width=True)
+        
+        with st.expander("📚 Skill Matrix"):
+            skills_df = pd.read_sql("""
+                SELECT s.Name AS Student, sk.SkillName, ss.Proficiency 
+                FROM StudentSkills ss
+                JOIN Students s ON ss.StudentID = s.StudentID
+                JOIN Skills sk ON ss.SkillID = sk.SkillID
+            """, conn)
+            st.dataframe(skills_df, use_container_width=True)
+        
+        with st.expander("🗓️ Session Calendar"):
+            session_df = pd.read_sql("""
+                SELECT s1.Name AS Tutor, s2.Name AS Learner, Date, Topic
+                FROM Sessions
+                JOIN Students s1 ON s1.StudentID = Sessions.TutorID
+                JOIN Students s2 ON s2.StudentID = Sessions.LearnerID
+            """, conn)
+            st.dataframe(session_df, use_container_width=True)
+
+    # TAB 5: Export Data
+    with tabs[4]:
+        st.header("📤 Data Export")
+        export_options = st.multiselect("Select Data to Export",
+                                       ["Students", "Faculty", "Skills", "Sessions"])
+        
+        if export_options:
+            for opt in export_options:
+                df = pd.read_sql(f"SELECT * FROM {opt}", conn)
+                csv = df.to_csv(index=False).encode()
+                st.download_button(
+                    f"Download {opt} Data",
+                    csv,
+                    file_name=f"{opt.lower()}_data.csv",
+                    mime="text/csv"
+                )
+
+    # TAB 6: Data Management (Delete)
     with tabs[5]:
-        st.header("📊 Admin Dashboard")
+        st.header("⚠️ Data Management")
+        
+        delete_type = st.selectbox("Select Data Type to Manage",
+                                  ["Students", "Faculty", "Skills", "Sessions"])
+        
+        if delete_type == "Students":
+            data = cursor.execute("SELECT StudentID, Name FROM Students").fetchall()
+            id_col = "StudentID"
+        elif delete_type == "Faculty":
+            data = cursor.execute("SELECT FacultyID, Name FROM Faculty").fetchall()
+            id_col = "FacultyID"
+        elif delete_type == "Skills":
+            data = cursor.execute("SELECT SkillID, SkillName FROM Skills").fetchall()
+            id_col = "SkillID"
+        elif delete_type == "Sessions":
+            data = cursor.execute("SELECT SessionID, Topic FROM Sessions").fetchall()
+            id_col = "SessionID"
+        
+        if data:
+            record = st.selectbox("Select Record to Delete", data,
+                                 format_func=lambda x: f"{x[1]} (ID: {x[0]})")
+            
+            if st.button("🗑️ Delete Record", type="primary"):
+                try:
+                    cursor.execute(f"""
+                        DELETE FROM {delete_type} 
+                        WHERE {id_col} = ?
+                    """, (record[0],))
+                    conn.commit()
+                    st.success("✅ Record deleted successfully")
+                    st.rerun()
+                except sqlite3.Error as e:
+                    st.error(f"❌ Deletion failed: {str(e)}")
+        else:
+            st.info("No records available for deletion")
 
-        st.subheader("Students")
-        students_df = pd.read_sql("SELECT * FROM Students", conn)
-        st.dataframe(students_df, use_container_width=True)
-
-        st.subheader("Faculties")
-        faculty_df = pd.read_sql("SELECT * FROM Faculty", conn)
-        st.dataframe(faculty_df, use_container_width=True)
-
-        st.subheader("Skills Assigned")
-        skills_df = pd.read_sql('''
-        SELECT s.Name AS Student, sk.SkillName, ss.Proficiency 
-        FROM StudentSkills ss
-        JOIN Students s ON ss.StudentID = s.StudentID
-        JOIN Skills sk ON ss.SkillID = sk.SkillID
+# --- Student/Faculty Interface ---
+else:
+    st.title("👩🎓 Student/Faculty Portal")
+    st.sidebar.success(f"Logged in as: {st.session_state.user_email}")
+    
+    # Get user details
+    cursor.execute("SELECT * FROM Students WHERE Email=?", (st.session_state.user_email,))
+    student_data = cursor.fetchone()
+    cursor.execute("SELECT * FROM Faculty WHERE Email=?", (st.session_state.user_email,))
+    faculty_data = cursor.fetchone()
+    
+    if student_data:
+        st.header("🎓 Your Student Profile")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Name", student_data[1])
+            st.metric("Year", student_data[3])
+        with col2:
+            st.metric("Email", student_data[2])
+        
+        st.subheader("📚 Your Skills")
+        skills_df = pd.read_sql(f'''
+            SELECT sk.SkillName, ss.Proficiency 
+            FROM StudentSkills ss
+            JOIN Skills sk ON ss.SkillID = sk.SkillID
+            WHERE ss.StudentID = {student_data[0]}
         ''', conn)
         st.dataframe(skills_df, use_container_width=True)
-
-        st.subheader("Sessions")
-        session_df = pd.read_sql('''
-        SELECT s1.Name AS Tutor, s2.Name AS Learner, Date, Topic
-        FROM Sessions
-        JOIN Students s1 ON s1.StudentID = Sessions.TutorID
-        JOIN Students s2 ON s2.StudentID = Sessions.LearnerID
+        
+    elif faculty_data:
+        st.header("👨🏫 Faculty Profile")
+        st.metric("Name", faculty_data[1])
+        st.metric("Department", faculty_data[3])
+        
+    st.subheader("🗓️ Upcoming Sessions")
+    if student_data:
+        session_df = pd.read_sql(f'''
+            SELECT s1.Name AS Tutor, s2.Name AS Learner, Date, Topic
+            FROM Sessions
+            JOIN Students s1 ON s1.StudentID = Sessions.TutorID
+            JOIN Students s2 ON s2.StudentID = Sessions.LearnerID
+            WHERE TutorID = {student_data[0]} OR LearnerID = {student_data[0]}
         ''', conn)
         st.dataframe(session_df, use_container_width=True)
-
-    # TAB 7: Export
-    with tabs[6]:
-        st.header("⬇️ Export Data")
-        file_map = {
-            "Students": students_df,
-            "Faculties": faculty_df,
-            "Skills Assigned": skills_df,
-            "Sessions": session_df
-        }
-
-        for label, df in file_map.items():
-            csv = df.to_csv(index=False).encode()
-            st.download_button(f"Download {label} CSV", csv, file_name=f"{label.lower().replace(' ', '_')}.csv")
-
+    elif faculty_data:
+        session_df = pd.read_sql('''
+            SELECT s1.Name AS Tutor, s2.Name AS Learner, Date, Topic
+            FROM Sessions
+            JOIN Students s1 ON s1.StudentID = Sessions.TutorID
+            JOIN Students s2 ON s2.StudentID = Sessions.LearnerID
+        ''', conn)
+        st.dataframe(session_df, use_container_width=True)

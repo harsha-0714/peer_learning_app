@@ -1,7 +1,12 @@
 import sqlite3
+import hashlib
 
 def get_connection():
     return sqlite3.connect("peer_learning.db", check_same_thread=False)
+
+def hash_password(password):
+    """Hashes a password using SHA-256."""
+    return hashlib.sha256(password.encode()).hexdigest()
 
 def initialize_db():
     conn = get_connection()
@@ -15,10 +20,11 @@ def initialize_db():
     )
     ''')
 
-    # Insert default admin if not exists
+    # Insert default admin if not exists (with hashed password)
     cursor.execute("SELECT * FROM Admin WHERE Username = 'admin'")
     if not cursor.fetchone():
-        cursor.execute("INSERT INTO Admin VALUES ('admin', 'admin123')")  # default credentials
+        default_hashed = hash_password('admin123')
+        cursor.execute("INSERT INTO Admin VALUES (?, ?)", ('admin', default_hashed))
 
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS Students (
